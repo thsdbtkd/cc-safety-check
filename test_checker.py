@@ -1,8 +1,27 @@
 """점검기 자가 시험: 설정 4가지에서 기대한 답이 나오는지 확인."""
-import json, subprocess, sys
-T = sys.argv[1]
+import json, os, subprocess, sys, tempfile
+HERE = os.path.dirname(os.path.abspath(__file__))
+FIX = {  # 시험용 설정 4가지 (임시 폴더에 만들고, 실제 설정은 건드리지 않음)
+    "empty/h/.claude": None, "empty/p": None,
+    "locked/h/.claude/settings.json": '{"permissions":{"disableBypassPermissionsMode":"disable","defaultMode":"default","deny":["Read(./.env)","Read(~/.ssh/**)","Bash(rm -rf *)","Bash(git push --force *)"]},"sandbox":{"enabled":true},"hooks":{"PreToolUse":[{"hooks":[{"type":"command","command":"x"}]}],"Stop":[{"hooks":[]}],"PostToolUse":[{"hooks":[]}]}}',
+    "locked/p": None,
+    "wide/h/.claude/settings.json": '{"permissions":{"defaultMode":"bypassPermissions"}}',
+    "wide/p/.claude/settings.json": '{"permissions":{"allow":["Bash(*)"]}}',
+    "wide/p/.mcp.json": '{"mcpServers":{"github":{}}}',
+    "broken/h/.claude/settings.json": '{"permissions": {',
+    "broken/p": None,
+}
+T = sys.argv[1] if len(sys.argv) > 1 else tempfile.mkdtemp(prefix="ccsc_test_")
+for rel, body in FIX.items():
+    path = os.path.join(T, rel)
+    if body is None:
+        os.makedirs(path, exist_ok=True)
+    else:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        if not os.path.exists(path):
+            with open(path, "w") as f: f.write(body)
 def run(c):
-    out = subprocess.run([sys.executable, "cc_safety_check.py", "--home", f"{T}/{c}/h", "--project", f"{T}/{c}/p", "--json"], capture_output=True, text=True, check=True).stdout
+    out = subprocess.run([sys.executable, os.path.join(HERE, "cc_safety_check.py"), "--home", f"{T}/{c}/h", "--project", f"{T}/{c}/p", "--json"], capture_output=True, text=True, check=True).stdout
     r = json.loads(out); return {i["문항"]: i["답"] for i in r["결과"]}, r
 ok = 0; tot = 0
 def exp(name, got, want):
