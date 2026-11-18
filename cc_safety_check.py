@@ -15,7 +15,7 @@
 import argparse, json, os, sys
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 MANAGED = [Path("/Library/Application Support/ClaudeCode/managed-settings.json"), Path("/etc/claude-code/managed-settings.json")]
 
 
@@ -28,10 +28,10 @@ def load(p):
         return {"__error__": str(e)}
 
 
-def gather(home, project):
+def gather(home, project, managed=None):
     files = [("사용자", home / ".claude" / "settings.json"),
              ("프로젝트 공유", project / ".claude" / "settings.json"),
-             ("프로젝트 개인", project / ".claude" / "settings.local.json")] + [("조직 관리", m) for m in MANAGED]
+             ("프로젝트 개인", project / ".claude" / "settings.local.json")] + [("조직 관리", m) for m in (managed if managed is not None else MANAGED)]
     found = []
     for scope, p in files:
         d = load(p)
@@ -42,7 +42,7 @@ def gather(home, project):
 
 def merged(found):
     perm = {"allow": [], "deny": [], "ask": []}
-    mode, bypass_locked, sandbox, hooks = None, False, False, {}
+    mode, bypass_locked, sandbox, hooks = None, None, False, {}
     for scope, p, d in found:
         if not isinstance(d, dict) or "__error__" in d:
             continue
@@ -50,9 +50,9 @@ def merged(found):
         for k in perm:
             perm[k] += [str(x) for x in (pm.get(k) or [])]
         if pm.get("defaultMode"):
-            mode = pm.get("defaultMode") if (mode is None or scope == "조직 관리") else mode
+            mode = pm.get("defaultMode")  # 읽는 순서 = 사용자 < 프로젝트 공유 < 프로젝트 개인 < 조직 관리(공식 우선순위), 뒤가 이김
         if str(pm.get("disableBypassPermissionsMode", "")).lower() == "disable":
-            bypass_locked = True
+            bypass_locked = "조직" if scope == "조직 관리" else (bypass_locked or "개인")
         sb = d.get("sandbox") or {}
         if isinstance(sb, dict) and sb.get("enabled") is True:
             sandbox = True
@@ -67,7 +67,7 @@ def extra_hook_files(home):
     for base in [home / ".claude" / "hooks", home / ".claude" / "plugins"]:
         if base.exists():
             for p in base.rglob("hooks.json"):
-                if "marketplaces" in p.parts:
+                if "marketplaces" in p.parts or ".trash" in p.parts:
                     continue
                 d = load(p)
                 if isinstance(d, dict) and isinstance(d.get("hooks"), dict):
@@ -96,8 +96,11 @@ def claude_md(home, project):
     return out
 
 
-def check(home, project):
-    found = gather(home, project)
+GAP = ("아니오", "모름", "부분")
+
+
+def check(home, project, managed=None):
+    found = gather(home, project, managed)
     perm, mode, bypass_locked, sandbox, hooks = merged(found)
     deny = " ".join(perm["deny"]).lower()
     allow = perm["allow"]
@@ -109,28 +112,30 @@ def check(home, project):
     def add(code, pts, title, ok, why, fix):
         items.append({"문항": code, "점수": pts, "점검": title, "답": ok, "근거": why, "고치는 법": fix})
 
-    add("A5", 3, "「확인 없이 전부 실행」 모드를 잠갔다", "예" if bypass_locked else "아니오",
-        "permissions.disableBypassPermissionsMode = \"disable\" " + ("있음" if bypass_locked else "없음"),
-        'settings.json 의 "permissions" 안에 "disableBypassPermissionsMode": "disable"')
+    a5 = {"조직": "예", "개인": "부분"}.get(bypass_locked, "아니오")
+    add("A5", 3, "「확인 없이 전부 실행」 모드를 잠갔다", a5,
+        "permissions.disableBypassPermissionsMode = \"disable\" " + {"조직": "조직 관리 설정에 있음(아무도 못 바꿈)", "개인": "개인·프로젝트 설정에만 있음(다른 사람·다른 설정이 바꿀 수 있음)"}.get(bypass_locked, "없음"),
+        '조직 관리 설정(managed-settings.json)의 "permissions" 안에 "disableBypassPermissionsMode": "disable" · 자동 모드까지 막으려면 "disableAutoMode"도')
     risky_mode = mode in ("bypassPermissions", "auto", "acceptEdits")
     add("B1", 3, "기본 권한 모드가 자동 승인이 아니다", "아니오" if risky_mode else "예",
         "defaultMode = {}".format(mode or "설정 없음(매번 확인)"),
         "바깥 글(이슈·웹페이지)을 읽는 작업에서는 자동 승인 모드를 쓰지 않기")
-    secret = any(k in deny for k in (".env", ".ssh", "secret", "credential", ".aws", "id_rsa"))
+    read_deny = " ".join(r for r in perm["deny"] if r.strip().lower().startswith("read(")).lower()
+    secret = any(k in read_deny for k in (".env", ".ssh", "secret", "credential", ".aws", "id_rsa"))
     add("A3", 3, "비밀 파일(.env · 키 파일) 읽기를 막았다", "예" if secret else "아니오",
-        "deny 규칙에 비밀 파일 경로 " + ("있음" if secret else "없음"),
-        '"deny": ["Read(./.env)", "Read(./.env.*)", "Read(~/.ssh/**)"]')
+        "Read(...) deny 규칙에 비밀 파일 경로 " + ("있음" if secret else "없음"),
+        '"permissions": {"deny": ["Read(./.env)", "Read(./.env.*)", "Read(~/.ssh/**)"]}')
     wide = [a for a in allow if a.strip() in ("Bash", "Bash(*)", "Bash(**)")]
     danger_deny = any(k in deny for k in ("bash(rm", "bash(git push", "bash(sudo", "bash(curl"))
     pre = "PreToolUse" in all_events
-    a4 = "아니오" if wide else ("예" if (danger_deny or pre) else "아니오")
+    a4 = "아니오" if wide else ("예" if danger_deny else ("모름" if pre else "아니오"))
     add("A4", 3, "위험 명령을 실행 전에 막는다", a4,
         ("모든 셸 명령 허용 규칙 있음: " + ", ".join(wide)) if wide else
         ("deny 위험 명령 규칙 " + ("있음" if danger_deny else "없음") + " · 실행 전 훅(PreToolUse) " + ("있음(내용은 확인 못 함)" if pre else "없음")),
         "위험 명령 deny 규칙이나 실행 전 훅 두기(deny 규칙은 sh -c 안의 명령을 못 잡는다고 공식 문서가 밝힘)")
     add("C1", 3, "샌드박스를 켰다", "예" if sandbox else "아니오",
         "sandbox.enabled " + ("true" if sandbox else "없음(기본은 꺼짐)"),
-        '"sandbox": {"enabled": true} 또는 세션에서 /sandbox')
+        '"sandbox": {"enabled": true} · 세션에서는 /sandbox')
     stop = "Stop" in all_events
     add("D1", 2, "「끝났습니다」 전에 기계 확인을 거친다", "모름" if stop else "아니오",
         "마감 훅(Stop) " + ("있음(무엇을 확인하는지는 못 읽음)" if stop else "없음"),
@@ -146,11 +151,11 @@ def check(home, project):
 
     app = [i for i in items if i["답"] != "해당 없음"]
     tot = sum(i["점수"] for i in app)
-    got = sum(i["점수"] for i in app if i["답"] in ("아니오", "모름"))
+    got = sum(i["점수"] for i in app if i["답"] in GAP)
     ratio = round(got / tot * 100, 1) if tot else 0.0
-    gaps3 = [i["문항"] for i in items if i["점수"] == 3 and i["답"] in ("아니오", "모름")]
+    gaps3 = [i["문항"] for i in items if i["점수"] == 3 and i["답"] in GAP]
     band = "높음" if (ratio >= 50 or len(gaps3) >= 3) else ("보통" if (ratio >= 20 or gaps3) else "낮음")
-    top = sorted([i for i in items if i["답"] in ("아니오", "모름")], key=lambda x: (-x["점수"], x["문항"]))[:3]
+    top = sorted([i for i in items if i["답"] in GAP], key=lambda x: (-x["점수"], x["문항"]))[:3]
     md = claude_md(home, project)
     return {"점검기": VERSION, "읽은 설정 파일": [str(p) for _, p, _ in found],
             "깨진 설정 파일": [str(p) for _, p, d in found if isinstance(d, dict) and "__error__" in d],
@@ -169,7 +174,7 @@ def show(r):
         print("추가 훅 파일(켜져 있는지는 클로드 코드 /hooks 화면으로 확인): " + ", ".join(r["추가 훅 파일"]))
     print()
     for i in r["결과"]:
-        mark = {"예": "  예  ", "아니오": "아니오", "모름": " 모름 ", "해당 없음": "해당없음"}[i["답"]]
+        mark = {"예": "  예  ", "아니오": "아니오", "모름": " 모름 ", "부분": " 부분 ", "해당 없음": "해당없음"}[i["답"]]
         print("[{}] {} {} ({}점)\n        {}".format(mark, i["문항"], i["점검"], i["점수"], i["근거"]))
     print("\n위험 비율 {}% · 구간 「{}」 · 3점 빈칸 {}개 ({})".format(s["위험 비율"], s["구간"], len(s["3점 빈칸"]), ", ".join(s["3점 빈칸"]) or "없음"))
     print("\n먼저 고칠 3개")
@@ -178,17 +183,17 @@ def show(r):
         print("  · {} {} → {}".format(code, i["점검"], i["고치는 법"]))
     for p, n in r["참고"]["CLAUDE.md 글자 수"].items():
         print("\n참고: {} {:,}자 — {}".format(p, n, r["참고"]["설명"]))
-    print("\n이 점검기는 설정 파일로 알 수 있는 {}문항만 봅니다. 사람이 답해야 하는 문항(깃 보호·배포 승인·백업 복구 같은 것)까지 보는 37문항 진단표와".format(s["자동으로 본 문항"]))
-    print("실행 전 관문 설치(보호 파일 · 완료 보고 검수 · 같은 오류 3번 멈춤 · 팀 PC별 개통 시험)는 크몽 「AI가드레일」에서 합니다.\n")
+    print("\n이 점검기는 설정 파일로 알 수 있는 {}문항만 봅니다. 사람이 답해야 하는 문항(깃 보호·배포 승인·백업 복구 같은 것)은 보지 않습니다.\n".format(s["자동으로 본 문항"]))
 
 
 def main():
     ap = argparse.ArgumentParser(description="클로드 코드 안전 점검기(읽기 전용)")
     ap.add_argument("--project", default=os.getcwd())
     ap.add_argument("--home", default=str(Path.home()), help=argparse.SUPPRESS)
+    ap.add_argument("--managed", nargs="*", help=argparse.SUPPRESS)  # 시험용: 조직 관리 설정 경로 바꾸기
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
-    r = check(Path(a.home).expanduser(), Path(a.project).expanduser().resolve())
+    r = check(Path(a.home).expanduser(), Path(a.project).expanduser().resolve(), [Path(m) for m in a.managed] if a.managed is not None else None)
     print(json.dumps(r, ensure_ascii=False, indent=1)) if a.json else show(r)
 
 

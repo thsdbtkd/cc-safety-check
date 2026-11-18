@@ -10,43 +10,53 @@ python3 cc_safety_check.py --project /내/프로젝트/경로
 ```
 
 ## 무엇을 보나 (8문항)
-| 문항 | 점검 | 보는 곳 |
-|:-|:-|:-|
-| A5 | 「확인 없이 전부 실행」 모드를 잠갔나 | `permissions.disableBypassPermissionsMode` |
-| B1 | 기본 권한 모드가 자동 승인이 아닌가 | `permissions.defaultMode` |
-| A3 | 비밀 파일(.env · 키 파일) 읽기를 막았나 | `permissions.deny` 의 Read 규칙 |
-| A4 | 위험 명령을 실행 전에 막나 | `permissions.deny` 의 Bash 규칙 · 실행 전 훅 · 「모든 셸 명령 허용」 규칙 |
-| C1 | 샌드박스를 켰나 | `sandbox.enabled` |
-| D1 | 「끝났습니다」 전에 기계 확인을 거치나 | 마감 훅(Stop) |
-| E2 | 같은 오류가 이어지면 멈추나 | 실행 뒤 훅(PostToolUse) |
-| A9 | 연결 도구(MCP 서버) 목록 | `~/.claude.json` · `.mcp.json` |
+| 문항 | 배점 | 점검 | 보는 곳 |
+|:-|:-|:-|:-|
+| A5 | 3 | 「확인 없이 전부 실행」 모드를 잠갔나 | `permissions.disableBypassPermissionsMode` (조직 관리 설정에 있으면 「예」, 개인·프로젝트 설정에만 있으면 「부분」) |
+| B1 | 3 | 기본 권한 모드가 자동 승인이 아닌가 | `permissions.defaultMode` (공식 우선순위대로 뒤 설정이 이김) |
+| A3 | 3 | 비밀 파일(.env · 키 파일) 읽기를 막았나 | `permissions.deny` 에서 `Read(` 로 시작하는 규칙만(셸 명령으로 읽는 길은 이 규칙으로 막히지 않아 A4 · C1에서 따로 봄) |
+| A4 | 3 | 위험 명령을 실행 전에 막나 | `permissions.deny` 의 Bash 규칙 · 실행 전 훅(훅만 있으면 「모름」) · 「모든 셸 명령 허용」 규칙 |
+| C1 | 3 | 샌드박스를 켰나 | `sandbox.enabled` |
+| D1 | 2 | 「끝났습니다」 전에 기계 확인을 거치나 | 마감 훅(Stop) (훅이 있으면 「모름」) |
+| E2 | 2 | 같은 오류가 이어지면 멈추나 | 실행 뒤 훅(PostToolUse) (훅이 있으면 「모름」) |
+| A9 | 2 | 연결 도구(MCP 서버) 목록 | `~/.claude.json` · `.mcp.json` |
 
-읽는 설정 파일: `~/.claude/settings.json` · `.claude/settings.json` · `.claude/settings.local.json` · 조직 관리 설정(`/Library/Application Support/ClaudeCode/managed-settings.json`, `/etc/claude-code/managed-settings.json`).
+읽는 설정 파일: `~/.claude/settings.json` · `.claude/settings.json` · `.claude/settings.local.json` · 조직 관리 설정(`/Library/Application Support/ClaudeCode/managed-settings.json`, `/etc/claude-code/managed-settings.json`). 기본 권한 모드는 설정 파일 기준 우선순위(사용자 < 프로젝트 공유 < 프로젝트 개인 < 조직 관리)대로 뒤 설정이 이깁니다. 실행할 때 명령줄 옵션으로 바꾼 값은 파일에 없어서 보지 못합니다.
 근거: 클로드 코드 공식 문서 [권한](https://code.claude.com/docs/en/permissions) · [설정](https://code.claude.com/docs/en/settings) · [샌드박스](https://code.claude.com/docs/en/sandboxing), OWASP 에이전트 응용 상위 10(2026판) ASI02 · ASI05.
 
-점수: 「아니오·모름」 문항의 점수 합 ÷ 해당 문항 점수 합. 3점 = 되돌릴 수 없는 손실 · 2점 = 복구는 되지만 크게 듦. 50% 이상이거나 3점 빈칸이 3개 이상이면 「높음」.
+답은 예 · 아니오 · 모름 · 부분 · 해당 없음 다섯 가지입니다. 점수: 「아니오·모름·부분」 문항의 점수 합 ÷ 해당 문항 점수 합. 3점 = 되돌릴 수 없는 손실 · 2점 = 복구는 되지만 크게 듦. 50% 이상이거나 3점 빈칸이 3개 이상이면 「높음」.
 
-## 예시 — 만든 사람의 맥에서 돌린 결과 (2026-11-10)
+## 예시 — 만든 사람의 맥에서 돌린 결과
+2026-11-17 · macOS 27.2.1 · Python 3.13.7 · 만든 사람 자기 맥 1대 결과입니다. 다른 컴퓨터 결과를 대표하지 않습니다.
 ```
-위험 비율 68.4% · 구간 「높음」 · 3점 빈칸 3개 (A5, A3, C1)
+위험 비율 84.2% · 구간 「높음」 · 3점 빈칸 4개 (A5, A3, A4, C1)
+
 먼저 고칠 3개
-  · A3 비밀 파일(.env · 키 파일) 읽기를 막았다 → "deny": ["Read(./.env)", "Read(./.env.*)", "Read(~/.ssh/**)"]
-  · A5 「확인 없이 전부 실행」 모드를 잠갔다 → "disableBypassPermissionsMode": "disable"
-  · C1 샌드박스를 켰다 → "sandbox": {"enabled": true}
+  · A3 비밀 파일(.env · 키 파일) 읽기를 막았다 → "permissions": {"deny": ["Read(./.env)", "Read(./.env.*)", "Read(~/.ssh/**)"]}
+  · A4 위험 명령을 실행 전에 막는다 → 위험 명령 deny 규칙이나 실행 전 훅 두기(deny 규칙은 sh -c 안의 명령을 못 잡는다고 공식 문서가 밝힘)
+  · A5 「확인 없이 전부 실행」 모드를 잠갔다 → 조직 관리 설정(managed-settings.json)의 "permissions" 안에 "disableBypassPermissionsMode": "disable" · 자동 모드까지 막으려면 "disableAutoMode"도
 ```
+0.1.0에서는 같은 맥이 68.4%로 나왔습니다. 실행 전 훅만 있고 위험 명령 deny 규칙이 없는 A4를 「예」로 잘못 셌기 때문입니다. 0.2.0은 훅 내용을 읽지 못하므로 「모름」으로 셉니다.
 
 ## 한계 (숨기지 않습니다)
-- 훅이 **있는지**만 봅니다. 훅이 무엇을 확인하는지는 읽지 못해 「모름」으로 표시합니다.
-- 사람이 답해야 하는 문항(깃 브랜치 보호 · 배포 승인 · 백업 복구 · 자료 기준)은 보지 않습니다. 그 문항까지 보려면 37문항 진단표를 쓰세요.
-- 설정 파일로 알 수 없는 것(실제 세션에서 쓰는 권한 모드 · 플러그인 훅이 켜져 있는지)은 클로드 코드의 `/status` · `/hooks` 화면으로 확인하세요.
+- 훅이 **있는지**만 봅니다. 훅 스크립트가 무엇을 확인하는지는 읽지 못해, 훅으로 판정하는 A4 · D1 · E2는 훅만 있으면 「모름」으로 표시합니다.
+- 사람이 확인해야 하는 항목(깃 브랜치 보호 · 배포 승인 · 백업 복구 · 자료 기준)은 설정 파일 점검 범위 밖입니다.
+- 설정 파일로 알 수 없는 것(실행할 때 옵션으로 바꾼 권한 모드 · 설치된 플러그인이 지금 켜져 있는지)은 클로드 코드의 `/status` · `/hooks` 화면으로 확인하세요.
 
 ## 자가 시험
 ```bash
 python3 test_checker.py
 ```
-시험용 설정 네 가지(빈 설정 · 잠근 설정 · 넓게 연 설정 · 깨진 설정)를 임시 폴더에 만들어 돌리고, 내 컴퓨터 설정은 건드리지 않습니다. 결과 20/20 (2026-11-10).
+시험용 설정 아홉 가지에서 확인 28개를 봅니다(빈 설정 · 개인 설정에서만 잠금 · 넓게 연 설정 · 깨진 설정 · 조직 관리 설정이 이김 · 실행 전 훅만 있음 · 프로젝트 개인 설정이 위험 · .env 쓰기만 막음 · 휴지통 플러그인 훅). 설정은 임시 폴더에 만들어 돌리고, 내 컴퓨터 설정은 건드리지 않습니다. 결과 28/28 (2026-11-17).
 
-## 만든 곳
-AI가드레일 — 클로드 코드 실행 전 관문(보호 파일 · 완료 보고 검수 · 같은 오류 3번 멈춤 · 팀 PC별 개통 시험) 설치. 크몽에서 「AI가드레일」을 찾으세요.
+## 0.2.0에서 고친 곳 (2026-11-17)
+- A4: 실행 전 훅만 있고 위험 명령 deny 규칙이 없으면 「예」 → 「모름」.
+- A5: 조직 관리 설정에 있으면 「예」, 개인·프로젝트 설정에만 있으면 「부분」(점수에는 빈칸으로 셈). 고치는 법에 `disableAutoMode` 추가.
+- 기본 권한 모드: 처음 찾은 값 대신 공식 우선순위대로 뒤 설정이 이김.
+- A3: `Read(` 로 시작하는 deny 규칙만 셈(쓰기만 막으면 「아니오」).
+- 휴지통(`.trash`)에 든 플러그인 훅은 세지 않음.
 
-라이선스: MIT (LICENSE). 그대로 제공되며, 이 점검기 결과만으로 안전을 보장하지 않습니다.
+## 만든 사람 · 연락처
+AI가드레일 · 이 저장소의 Issues(https://github.com/thsdbtkd/cc-safety-check/issues)로 알려 주세요.
+
+라이선스: MIT (LICENSE). 그대로 제공됩니다. 이 점검기 결과만으로 안전하다고 할 수 없습니다.
