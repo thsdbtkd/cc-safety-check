@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cc-safety-check"
+version = "0.2.0"
+description = "Claude Code 설정 파일을 읽어 사고 나기 쉬운 빈칸 8문항을 보여 주는 읽기 전용 점검기"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [{name = "AI가드레일"}]
+keywords = ["claude-code", "security", "hooks", "settings", "audit"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: Console",
+    "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://github.com/thsdbtkd/cc-safety-check"
+Issues = "https://github.com/thsdbtkd/cc-safety-check/issues"
+
+[project.scripts]
+cc-safety-check = "cc_safety_check:main"
+
+[tool.setuptools]
+py-modules = ["cc_safety_check"]
