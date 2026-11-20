@@ -6,8 +6,10 @@
 - 파이썬 3.8 이상, 표준 라이브러리만. 맥·리눅스에서 시험했습니다(윈도우는 아직 시험 전).
 
 ```bash
-python3 cc_safety_check.py --project /내/프로젝트/경로
+python3 -m pip install cc-safety-check
+cc-safety-check --project /내/프로젝트/경로
 ```
+설치 없이 파일 하나만 받아 써도 됩니다: `python3 cc_safety_check.py --project /내/프로젝트/경로`
 
 ## 무엇을 보나 (8문항)
 | 문항 | 배점 | 점검 | 보는 곳 |
