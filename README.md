@@ -60,5 +60,6 @@ python3 test_checker.py
 
 ## 만든 사람 · 연락처
 AI가드레일 · 이 저장소의 Issues(https://github.com/thsdbtkd/cc-safety-check/issues)로 알려 주세요.
+공개하기 어려운 내용(회사 보안 걱정, 설치 상담)은 비공개 신청서로 남겨 주세요. 만든 사람만 봅니다: https://docs.google.com/forms/d/e/1FAIpQLSf5d47DZd6nQyao-n6lNAQQEQ4RwXJrXDY7aixq6HnvQjSz8g/viewform
 
 라이선스: MIT (LICENSE). 그대로 제공됩니다. 이 점검기 결과만으로 안전하다고 할 수 없습니다.
