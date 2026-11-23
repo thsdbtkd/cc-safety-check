@@ -15,7 +15,7 @@
 import argparse, json, os, sys
 from pathlib import Path
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 MANAGED = [Path("/Library/Application Support/ClaudeCode/managed-settings.json"), Path("/etc/claude-code/managed-settings.json")]
 
 
@@ -43,6 +43,7 @@ def gather(home, project, managed=None):
 def merged(found):
     perm = {"allow": [], "deny": [], "ask": []}
     mode, bypass_locked, sandbox, hooks = None, None, False, {}
+    deny_read = []  # 0.2.1: sandbox.filesystem.denyRead (셸 명령 읽기까지 운영체제 수준에서 막는 목록)
     for scope, p, d in found:
         if not isinstance(d, dict) or "__error__" in d:
             continue
@@ -56,10 +57,13 @@ def merged(found):
         sb = d.get("sandbox") or {}
         if isinstance(sb, dict) and sb.get("enabled") is True:
             sandbox = True
+        fs = (sb.get("filesystem") or {}) if isinstance(sb, dict) else {}
+        if isinstance(fs, dict):
+            deny_read += [str(x) for x in (fs.get("denyRead") or [])]
         for ev, arr in (d.get("hooks") or {}).items():
             hooks.setdefault(ev, 0)
             hooks[ev] += len(arr or [])
-    return perm, mode, bypass_locked, sandbox, hooks
+    return perm, mode, bypass_locked, sandbox, hooks, deny_read
 
 
 def extra_hook_files(home):
@@ -96,12 +100,13 @@ def claude_md(home, project):
     return out
 
 
-GAP = ("아니오", "모름", "부분")
+GAP = ("아니오", "부분")   # 0.2.1: 「모름」은 위험 비율에 넣지 않고 「확인 못 함」으로 따로 센다
+UNKNOWN = "모름"
 
 
 def check(home, project, managed=None):
     found = gather(home, project, managed)
-    perm, mode, bypass_locked, sandbox, hooks = merged(found)
+    perm, mode, bypass_locked, sandbox, hooks, deny_read = merged(found)
     deny = " ".join(perm["deny"]).lower()
     allow = perm["allow"]
     extra = extra_hook_files(home)
@@ -121,10 +126,16 @@ def check(home, project, managed=None):
         "defaultMode = {}".format(mode or "설정 없음(매번 확인)"),
         "바깥 글(이슈·웹페이지)을 읽는 작업에서는 자동 승인 모드를 쓰지 않기")
     read_deny = " ".join(r for r in perm["deny"] if r.strip().lower().startswith("read(")).lower()
-    secret = any(k in read_deny for k in (".env", ".ssh", "secret", "credential", ".aws", "id_rsa"))
-    add("A3", 3, "비밀 파일(.env · 키 파일) 읽기를 막았다", "예" if secret else "아니오",
-        "Read(...) deny 규칙에 비밀 파일 경로 " + ("있음" if secret else "없음"),
-        '"permissions": {"deny": ["Read(./.env)", "Read(./.env.*)", "Read(~/.ssh/**)"]}')
+    keys = (".env", ".ssh", "secret", "credential", ".aws", "id_rsa")
+    secret = any(k in read_deny for k in keys)
+    # 0.2.1: Read 거부 규칙은 읽기 도구에만 걸려 셸 명령(cat·파이썬 한 줄)으로 읽는 길이 남음.
+    # 샌드박스를 켜고 denyRead 에 비밀 경로가 있어야 셸 명령 읽기도 운영체제 수준에서 막힘(공식 sandboxing 문서).
+    sb_secret = sandbox and any(k in " ".join(deny_read).lower() for k in keys)
+    a3 = "예" if (secret and sb_secret) else ("부분" if (secret or sb_secret) else "아니오")
+    add("A3", 3, "비밀 파일(.env · 키 파일) 읽기를 막았다", a3,
+        "Read(...) deny 규칙에 비밀 파일 경로 " + ("있음" if secret else "없음") +
+        " · 샌드박스 denyRead 에 비밀 파일 경로 " + ("있음" if sb_secret else ("있으나 샌드박스 꺼짐" if deny_read else "없음")),
+        '"permissions": {"deny": ["Read(./.env)", "Read(./.env.*)", "Read(~/.ssh/**)"]} · 셸 명령 읽기까지 막으려면 "sandbox": {"enabled": true, "filesystem": {"denyRead": [".env", "**/.env", "~/.ssh"]}}')
     wide = [a for a in allow if a.strip() in ("Bash", "Bash(*)", "Bash(**)")]
     danger_deny = any(k in deny for k in ("bash(rm", "bash(git push", "bash(sudo", "bash(curl"))
     pre = "PreToolUse" in all_events
@@ -140,16 +151,20 @@ def check(home, project, managed=None):
     add("D1", 2, "「끝났습니다」 전에 기계 확인을 거친다", "모름" if stop else "아니오",
         "마감 훅(Stop) " + ("있음(무엇을 확인하는지는 못 읽음)" if stop else "없음"),
         "마감 훅으로 시험 결과·검사 기록이 없으면 마감을 막기")
-    post = "PostToolUse" in all_events
-    add("E2", 2, "같은 오류가 이어지면 자동으로 멈춘다", "모름" if post else "아니오",
-        "실행 뒤 훅(PostToolUse) " + ("있음(반복 감지 여부는 못 읽음)" if post else "없음"),
-        "같은 오류 3번이면 다음 호출을 막는 훅")
+    # 0.2.1: 실패한 도구 호출은 PostToolUseFailure 로 따로 오므로 둘 중 하나라도 있으면 셈
+    post_ev = [e for e in ("PostToolUse", "PostToolUseFailure") if e in all_events]
+    add("E2", 2, "같은 오류가 이어지면 자동으로 멈춘다", "모름" if post_ev else "아니오",
+        "실행 뒤 훅(PostToolUse · PostToolUseFailure) " + (("있음: " + ", ".join(post_ev) + "(반복 감지 여부는 못 읽음)") if post_ev else "없음"),
+        "실패 기록 훅(PostToolUseFailure)으로 같은 오류 횟수를 세고, 3번이면 실행 전 훅(PreToolUse)이 다음 호출을 막게 묶기")
     mcp = mcp_servers(home, project)
     add("A9", 2, "연결 도구(MCP 서버)마다 만든 곳을 확인했다", "모름" if mcp else "해당 없음",
         "MCP 서버 {}개: {}".format(len(mcp), ", ".join(mcp) if mcp else "없음"),
         "서버마다 만든 곳·권한 범위를 표로 남기기")
 
-    app = [i for i in items if i["답"] != "해당 없음"]
+    # 0.2.1: 훅 내용을 못 읽어 「모름」인 문항은 분자·분모에서 빼고 「확인 못 함」으로 따로 보여 준다
+    #   (장치를 다 넣은 설정도 훅 문항이 모두 「모름」이라 높음으로 나오던 문제)
+    app = [i for i in items if i["답"] not in ("해당 없음", UNKNOWN)]
+    unknown = [i["문항"] for i in items if i["답"] == UNKNOWN]
     tot = sum(i["점수"] for i in app)
     got = sum(i["점수"] for i in app if i["답"] in GAP)
     ratio = round(got / tot * 100, 1) if tot else 0.0
@@ -161,6 +176,7 @@ def check(home, project, managed=None):
             "깨진 설정 파일": [str(p) for _, p, d in found if isinstance(d, dict) and "__error__" in d],
             "추가 훅 파일": [str(p) for p, _ in extra], "결과": items,
             "요약": {"자동으로 본 문항": len(items), "해당 문항": len(app), "위험 비율": ratio, "3점 빈칸": gaps3, "구간": band,
+                   "확인 못 함": unknown,
                    "먼저 고칠 3개": [t["문항"] for t in top]},
             "참고": {"CLAUDE.md 글자 수": {str(p): n for p, n in md},
                    "설명": "CLAUDE.md 는 세션마다 읽혀 길수록 매번 토큰을 씁니다(공식 문서 code.claude.com/docs/en/memory)."}}
@@ -176,7 +192,11 @@ def show(r):
     for i in r["결과"]:
         mark = {"예": "  예  ", "아니오": "아니오", "모름": " 모름 ", "부분": " 부분 ", "해당 없음": "해당없음"}[i["답"]]
         print("[{}] {} {} ({}점)\n        {}".format(mark, i["문항"], i["점검"], i["점수"], i["근거"]))
-    print("\n위험 비율 {}% · 구간 「{}」 · 3점 빈칸 {}개 ({})".format(s["위험 비율"], s["구간"], len(s["3점 빈칸"]), ", ".join(s["3점 빈칸"]) or "없음"))
+    print("\n위험 비율 {}% · 구간 「{}」 · 3점 빈칸 {}개 ({}) · 확인 못 함 {}개 ({})".format(
+        s["위험 비율"], s["구간"], len(s["3점 빈칸"]), ", ".join(s["3점 빈칸"]) or "없음",
+        len(s["확인 못 함"]), ", ".join(s["확인 못 함"]) or "없음"))
+    if s["확인 못 함"]:
+        print("  (확인 못 함 = 훅은 있지만 무엇을 확인하는지 점검기가 읽지 못한 문항. 위험 비율에는 넣지 않았습니다. /hooks 화면으로 직접 확인하세요)")
     print("\n먼저 고칠 3개")
     for code in s["먼저 고칠 3개"]:
         i = next(x for x in r["결과"] if x["문항"] == code)
